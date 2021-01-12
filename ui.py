@@ -34,6 +34,12 @@ class LightController(QThread):
 
         self.lights = OrderedDict()                     # mapping from serial to (model, view)
 
+    def eliminate_tab(self, serial):
+        self.tab_destroy.emit(serial)
+        del self.lights[serial]
+        force_rediscovery(self.q)
+        self.q.task_done()
+
     def run(self):
         while True:
             task = self.q.get()
@@ -79,9 +85,7 @@ class LightController(QThread):
                     try:
                         new_info = model.info()
                     except:
-                        self.tab_destroy.emit(task.serial)
-                        del self.lights[task.serial]
-                        force_rediscovery(self.q)
+                        self.eliminate_tab(task.serial)
                         return
                     updated_view = LightView(
                         ip=original_view.ip,
@@ -98,12 +102,16 @@ class LightController(QThread):
                     self.tab_destroy.emit(task.serial)
                 else:
                     model, original_view = self.lights[task.serial]
-                    if task.active is not None:
-                        model.on() if taskl.active else model.off()
-                    if task.brightness is not None:
-                        model.brightness(task.brightness)
-                    if task.temperature is not None:
-                        model.color(task.temperature)
+                    try:
+                        if task.active is not None:
+                            model.on() if task.active else model.off()
+                        if task.brightness is not None:
+                            model.brightness(task.brightness)
+                        if task.temperature is not None:
+                            model.color(task.temperature)
+                    except:
+                        self.eliminate_tab(task.serial)
+                        return
             self.q.task_done()
 
 
@@ -273,7 +281,6 @@ def main():
 
     menu = ElgatoMenu()
     tab_widget_action = TabWidgetAction(q)
-    tab_widget_action.add_tab("blah", LightView("blah", "blah", "blah", False, 100, 3000))
     menu.addAction(tab_widget_action)
 
     def query_tab(index):
