@@ -15,13 +15,14 @@ DiscoverTask = namedtuple("DiscoverTask", ("timeout",))
 QueryTask = namedtuple("QueryTask", ("serial",))
 AdjustTask = namedtuple("AdjustTask", ("serial", "active", "brightness", "temperature"))
 
-LightView = namedtuple("LightState", ("ip", "serial", "name", "active", "brightness", "temperature"))
+LightView = namedtuple(
+    "LightState", ("ip", "serial", "name", "active", "brightness", "temperature")
+)
 
-# TODO: Think more about interleaving calls to `force_rediscovery`
-# I don't think that they can deadlock or race, but it's worth
-# thinking about
+
 def force_rediscovery(q):
     q.put(DiscoverTask(DEFAULT_TIMEOUT))
+
 
 class LightController(QThread):
     tab_create = pyqtSignal(str, LightView)
@@ -32,7 +33,7 @@ class LightController(QThread):
         super(LightController, self).__init__(parent)
         self.q = q
 
-        self.lights = OrderedDict()                     # mapping from serial to (model, view)
+        self.lights = OrderedDict()  # mapping from serial to (model, view)
 
     def eliminate_tab(self, serial):
         self.tab_destroy.emit(serial)
@@ -47,7 +48,9 @@ class LightController(QThread):
             if isinstance(task, DiscoverTask):
                 timeout = task.timeout
                 new_lights_model = leglight.discover(timeout)
-                new_lights_set = frozenset(light.serialNumber for light in new_lights_model)
+                new_lights_set = frozenset(
+                    light.serialNumber for light in new_lights_model
+                )
 
                 new_lights_state = OrderedDict()
                 seen_lights = {}
@@ -69,7 +72,7 @@ class LightController(QThread):
                                 name=new_light_model.productName,
                                 active=new_light_model.isOn,
                                 brightness=new_light_model.isBrightness,
-                                temperature=new_light_model.isTemperature
+                                temperature=new_light_model.isTemperature,
                             )
                             new_light_state = (new_light_model, new_view)
                             new_lights_state[new_serial] = new_light_state
@@ -93,7 +96,7 @@ class LightController(QThread):
                         name=original_view.name,
                         active=new_info["on"],
                         brightness=new_info["brightness"],
-                        temperature=new_info["temperature"]
+                        temperature=new_info["temperature"],
                     )
                     self.tab_update.emit(task.serial, updated_view)
                     self.lights[task.serial] = (model, updated_view)
@@ -152,11 +155,11 @@ class ElgatoSlider(QSlider):
         options = QStyleOptionSlider()
         self.initStyleOption(options)
         groove = self.style().subControlRect(
-            QStyle.CC_Slider, options,
-            QStyle.SC_SliderGroove, self)
+            QStyle.CC_Slider, options, QStyle.SC_SliderGroove, self
+        )
         slider_handle = self.style().subControlRect(
-            QStyle.CC_Slider, options,
-            QStyle.SC_SliderHandle, self)
+            QStyle.CC_Slider, options, QStyle.SC_SliderHandle, self
+        )
 
         slider_left = groove.x()
         slider_right = groove.right() - slider_handle.width() + 1
@@ -164,13 +167,18 @@ class ElgatoSlider(QSlider):
 
         pr = pos - slider_handle.center() + slider_handle.topLeft()
         return QStyle.sliderValueFromPosition(
-            self.minimum(), self.maximum(), pr.x() - slider_left,
-            span, options.upsideDown)
+            self.minimum(),
+            self.maximum(),
+            pr.x() - slider_left,
+            span,
+            options.upsideDown,
+        )
 
 
 class ElgatoLabeledSlider(QWidget):
-    def __init__(self, controller_callback, name, min_val,
-                 max_val, tick_interval, parent=None):
+    def __init__(
+        self, controller_callback, name, min_val, max_val, tick_interval, parent=None
+    ):
         QWidget.__init__(self, parent)
 
         layout = QVBoxLayout()
@@ -185,7 +193,9 @@ class ElgatoLabeledSlider(QWidget):
         self.option.setTickInterval(tick_interval)
         self.option.setSingleStep(1)
 
-        self.option.sliderMoved.connect(lambda value: QToolTip.showText(QCursor.pos(), f"{value}", None))
+        self.option.sliderMoved.connect(
+            lambda value: QToolTip.showText(QCursor.pos(), f"{value}", None)
+        )
 
         self.option.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         sz = ((max_val - min_val) // tick_interval) * 10
@@ -213,44 +223,59 @@ class TabWidgetAction(QWidgetAction):
         individual_tab_widget.serial = light_serial
         layout = QVBoxLayout()
 
-        brightness_callback = lambda v: \
-            self.q.put(AdjustTask(serial=light_serial,
-                                  active=None,
-                                  brightness=v,
-                                  temperature=None))
-        temperature_callback = lambda v: \
-            self.q.put(AdjustTask(serial=light_serial,
-                                  active=None,
-                                  brightness=None,
-                                  temperature=v))
+        active_callback = lambda v: self.q.put(
+            AdjustTask(serial=light_serial, active=v, brightness=None, temperature=None)
+        )
+        brightness_callback = lambda v: self.q.put(
+            AdjustTask(serial=light_serial, active=None, brightness=v, temperature=None)
+        )
+        temperature_callback = lambda v: self.q.put(
+            AdjustTask(serial=light_serial, active=None, brightness=None, temperature=v)
+        )
 
-        brightness_slider = ElgatoLabeledSlider(brightness_callback,
-                                                "Brightness",
-                                                0, 100, 10,
-                                                individual_tab_widget)
-        temperature_slider = ElgatoLabeledSlider(temperature_callback,
-                                                 "Color Temperature",
-                                                 2900, 7000, 100,
-                                                 individual_tab_widget)
+        active_toggle = QCheckBox("Active", individual_tab_widget)
 
+        brightness_slider = ElgatoLabeledSlider(
+            brightness_callback, "Brightness", 0, 100, 10, individual_tab_widget
+        )
+        temperature_slider = ElgatoLabeledSlider(
+            temperature_callback,
+            "Color Temperature",
+            2900,
+            7000,
+            100,
+            individual_tab_widget,
+        )
+
+        active_toggle.stateChanged.connect(
+            lambda: active_callback(active_toggle.isChecked())
+        )
+
+        layout.addWidget(active_toggle)
         layout.addWidget(brightness_slider)
         layout.addWidget(temperature_slider)
 
-        self.serial_to_view[light_serial] = \
-            (brightness_slider, temperature_slider)
+        self.serial_to_view[light_serial] = (
+            active_toggle,
+            brightness_slider,
+            temperature_slider,
+        )
         self.serial_to_view.move_to_end(light_serial)
 
+        active_toggle.setChecked(light_view.active)
         brightness_slider.set_position(light_view.brightness)
         temperature_slider.set_position(light_view.temperature)
 
         individual_tab_widget.setLayout(layout)
 
-        self.widget.addTab(individual_tab_widget,
-                           f"{light_view.name}: {light_serial}")
+        self.widget.addTab(individual_tab_widget, f"{light_view.name}: {light_serial}")
 
     def update_tab(self, light_serial, light_view):
         try:
-            brightness_slider, temperature_slider = self.serial_to_view[light_serial]
+            active_toggle, brightness_slider, temperature_slider = self.serial_to_view[
+                light_serial
+            ]
+            active_toggle.setChecked(light_view.active)
             brightness_slider.set_position(light_view.brightness)
             temperature_slider.set_position(light_view.temperature)
         except:
@@ -263,6 +288,7 @@ class TabWidgetAction(QWidgetAction):
             self.widget.removeTab(index)
         except:
             pass
+
 
 def main():
     app = QApplication([])
@@ -281,6 +307,7 @@ def main():
 
     menu = ElgatoMenu()
     tab_widget_action = TabWidgetAction(q)
+    tab_widget_action.add_tab("initializing...", LightView("", "", "", False, 0, 3000))
     menu.addAction(tab_widget_action)
 
     def query_tab(index):
@@ -316,9 +343,10 @@ def main():
         menu.exec(QCursor.pos())
 
     tray.activated.connect(activation_event)
-    #tray.setContextMenu(menu)
+    # tray.setContextMenu(menu)
 
     sys.exit(app.exec_())
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
