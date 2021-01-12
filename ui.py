@@ -1,7 +1,7 @@
 import sys, signal
 import threading
 import queue
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 
 from PyQt5.QtCore import Qt, QSignalBlocker, QThread, pyqtSignal
 from PyQt5.QtGui import *
@@ -22,7 +22,7 @@ class LightController(QThread):
         super(LightController, self).__init__(parent)
         self.q = q
 
-        self.lights = []                     # mapping from serial to (model, view)
+        self.lights = OrderedDict()                     # mapping from serial to (model, view)
 
     def run(self):
         while True:
@@ -33,15 +33,17 @@ class LightController(QThread):
                 new_lights_model = leglight.discover(timeout)
                 new_lights_set = frozenset(light.serialNumber for light in new_lights_model)
 
-                new_lights_state = []
+                new_lights_state = OrderedDict()
                 seen_lights = {}
 
-                if new_lights_set != frozenset(serial for serial, _, _ in self.lights):
+                if new_lights_set != frozenset(serial for serial in self.lights.keys()):
                     for light_serial, model, light_view in self.lights:
                         if light_serial not in new_lights_set:
                             self.tab_destroy.emit(light_serial, light_view)
                         else:
-                            new_lights_state.append((light_serial, model, light_view))
+                            #new_lights_state.append((light_serial, model, light_view))
+                            new_lights_state[light_serial] = (model, light_view)
+                            new_lights_state.move_to_end(light_serial)
                         seen_lights.add(light_serial)
                     for new_light_model in new_lights_model:
                         new_serial = new_light_model.serialNumber
@@ -54,9 +56,13 @@ class LightController(QThread):
                                 brightness=new_light_model.isBrightness,
                                 temperature=new_light_model.isTemperature
                             )
-                            new_light_state = (new_serial, new_light_model, new_view)
-                            new_lights_state.append(new_light_state)
+                            new_light_state = (new_light_model, new_view)
+                            #new_lights_state.append(new_light_state)
+                            new_lights_state[new_serial] = new_light_state
+                            new_lights_state.move_to_end(new_serial)
+
                             self.tab_create.emit(new_serial, new_view)
+                    self.lights = new_lights_state
                 elif isinstance(task, QueryTask):
                     pass
             self.q.task_done()
