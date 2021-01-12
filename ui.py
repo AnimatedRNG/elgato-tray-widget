@@ -3,16 +3,25 @@ import threading
 import queue
 from collections import OrderedDict, namedtuple
 
-from PyQt5.QtCore import Qt, QSignalBlocker, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QSignalBlocker, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 import leglight
+
+DEFAULT_TIMEOUT = 2
+DEFAULT_REFRESH = 3000
 
 DiscoverTask = namedtuple("DiscoverTask", ("timeout",))
 QueryTask = namedtuple("QueryTask", ("serial",))
 AdjustTask = namedtuple("AdjustTask", ("serial", "active", "brightness", "temperature"))
 
 LightView = namedtuple("LightState", ("ip", "serial", "name", "active", "brightness", "temperature"))
+
+# TODO: Think more about interleaving calls to `force_rediscovery`
+# I don't think that they can deadlock or race, but it's worth
+# thinking about
+def force_rediscovery(q):
+    q.put(DiscoverTask(DEFAULT_TIMEOUT))
 
 class LightController(QThread):
     tab_create = pyqtSignal(str, LightView)
@@ -67,7 +76,13 @@ class LightController(QThread):
                     self.tab_destroy.emit(task.serial)
                 else:
                     model, original_view = self.lights[task.serial]
-                    new_info = model.info()
+                    try:
+                        new_info = model.info()
+                    except:
+                        self.tab_destroy.emit(task.serial)
+                        del self.lights[task.serial]
+                        force_rediscovery(self.q)
+                        return
                     updated_view = LightView(
                         ip=original_view.ip,
                         serial=original_view.serial,
@@ -93,6 +108,11 @@ class LightController(QThread):
 
 
 class ElgatoMenu(QMenu):
+    close_menu = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super(ElgatoMenu, self).__init__(parent)
+
     def mouseReleaseEvent(self, e):
         action = self.activeAction()
 
@@ -100,6 +120,10 @@ class ElgatoMenu(QMenu):
             blocker = QSignalBlocker(action)
         else:
             return super().mouseReleaseEvent(e)
+
+    def closeEvent(self, e):
+        super(ElgatoMenu, self).closeEvent(e)
+        self.close_menu.emit()
 
 
 class ElgatoSlider(QSlider):
@@ -171,7 +195,7 @@ class TabWidgetAction(QWidgetAction):
         QWidgetAction.__init__(self, parent)
         self.q = q
 
-        self.serial_to_view = {}
+        self.serial_to_view = OrderedDict()
 
         self.widget = QTabWidget()
         self.setDefaultWidget(self.widget)
@@ -206,6 +230,7 @@ class TabWidgetAction(QWidgetAction):
 
         self.serial_to_view[light_serial] = \
             (brightness_slider, temperature_slider)
+        self.serial_to_view.move_to_end(light_serial)
 
         brightness_slider.set_position(light_view.brightness)
         temperature_slider.set_position(light_view.temperature)
@@ -217,11 +242,17 @@ class TabWidgetAction(QWidgetAction):
 
     def update_tab(self, light_serial, light_view):
         try:
-            #print(f"calling tab update with {light_serial}: {light_view}")
             brightness_slider, temperature_slider = self.serial_to_view[light_serial]
             brightness_slider.set_position(light_view.brightness)
             temperature_slider.set_position(light_view.temperature)
-            self.widget.processEvents()
+        except:
+            pass
+
+    def destroy_tab(self, light_serial):
+        try:
+            individual_tab_widget = self.serial_to_view[light_serial][0].parentWidget()
+            index = self.widget.indexOf(individual_tab_widget)
+            self.widget.removeTab(index)
         except:
             pass
 
@@ -231,7 +262,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     q = queue.Queue()
-    q.put(DiscoverTask(2))
+    q.put(DiscoverTask(DEFAULT_TIMEOUT))
     controller = LightController(q)
 
     icon = QIcon("elgato_logo_icon.png")
@@ -245,11 +276,17 @@ def main():
     tab_widget_action.add_tab("blah", LightView("blah", "blah", "blah", False, 100, 3000))
     menu.addAction(tab_widget_action)
 
-    tab_widget_action.widget.currentChanged.connect(
-        lambda index: q.put(QueryTask(tab_widget_action.widget.widget(index).serial)))
+    def query_tab(index):
+        try:
+            q.put(QueryTask(tab_widget_action.widget.widget(index).serial))
+        except AttributeError as _:
+            pass
+
+    tab_widget_action.widget.currentChanged.connect(query_tab)
 
     controller.tab_create.connect(tab_widget_action.add_tab)
     controller.tab_update.connect(tab_widget_action.update_tab)
+    controller.tab_destroy.connect(tab_widget_action.destroy_tab)
     controller.start()
 
     quit = QAction("Quit")
@@ -257,6 +294,18 @@ def main():
     menu.addAction(quit)
 
     def activation_event(event):
+        def update():
+            current_index = tab_widget_action.widget.currentIndex()
+            if current_index >= 0:
+                query_tab(current_index)
+            else:
+                force_rediscovery(q)
+
+        timer = QTimer()
+        menu.close_menu.connect(timer.stop)
+        timer.timeout.connect(update)
+        timer.start(DEFAULT_REFRESH)
+        update()
         menu.exec(QCursor.pos())
 
     tray.activated.connect(activation_event)
