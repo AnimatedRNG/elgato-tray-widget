@@ -10,6 +10,7 @@ import leglight
 
 DiscoverTask = namedtuple("DiscoverTask", ("timeout",))
 QueryTask = namedtuple("QueryTask", ("serial",))
+AdjustTask = namedtuple("AdjustTask", ("serial", "active", "brightness", "temperature"))
 
 LightView = namedtuple("LightState", ("ip", "serial", "name", "active", "brightness", "temperature"))
 
@@ -77,6 +78,17 @@ class LightController(QThread):
                     )
                     self.tab_update.emit(task.serial, updated_view)
                     self.lights[task.serial] = (model, updated_view)
+            elif isinstance(task, AdjustTask):
+                if task.serial not in self.lights.keys():
+                    self.tab_destroy.emit(task.serial)
+                else:
+                    model, original_view = self.lights[task.serial]
+                    if task.active is not None:
+                        model.on() if taskl.active else model.off()
+                    if task.brightness is not None:
+                        model.brightness(task.brightness)
+                    if task.temperature is not None:
+                        model.color(task.temperature)
             self.q.task_done()
 
 
@@ -89,12 +101,20 @@ class ElgatoMenu(QMenu):
         else:
             return super().mouseReleaseEvent(e)
 
+
 class ElgatoSlider(QSlider):
+    def __init__(self, controller_callback, parent=None):
+        super(ElgatoSlider, self).__init__(Qt.Horizontal, parent)
+        self.controller_callback = controller_callback
+
     def mousePressEvent(self, event):
         super(ElgatoSlider, self).mousePressEvent(event)
         if event.button() == Qt.LeftButton:
             val = self.pixelPosToRangeValue(event.pos())
             self.setValue(val)
+
+    def mouseReleaseEvent(self, event):
+        self.controller_callback(self.value())
 
     def pixelPosToRangeValue(self, pos):
         options = QStyleOptionSlider()
@@ -117,7 +137,8 @@ class ElgatoSlider(QSlider):
 
 
 class ElgatoLabeledSlider(QWidget):
-    def __init__(self, name, min_val, max_val, tick_interval, parent=None):
+    def __init__(self, controller_callback, name, min_val,
+                 max_val, tick_interval, parent=None):
         QWidget.__init__(self, parent)
 
         layout = QVBoxLayout()
@@ -125,7 +146,7 @@ class ElgatoLabeledSlider(QWidget):
         label = QLabel(name)
         layout.addWidget(label)
 
-        self.option = ElgatoSlider(Qt.Horizontal, self)
+        self.option = ElgatoSlider(controller_callback, self)
         self.option.setRange(min_val, max_val)
         self.option.setFocusPolicy(Qt.StrongFocus)
         self.option.setTickPosition(QSlider.TicksAbove)
@@ -160,10 +181,23 @@ class TabWidgetAction(QWidgetAction):
         individual_tab_widget.serial = light_serial
         layout = QVBoxLayout()
 
-        brightness_slider = ElgatoLabeledSlider("Brightness",
+        brightness_callback = lambda v: \
+            self.q.put(AdjustTask(serial=light_serial,
+                                  active=None,
+                                  brightness=v,
+                                  temperature=None))
+        temperature_callback = lambda v: \
+            self.q.put(AdjustTask(serial=light_serial,
+                                  active=None,
+                                  brightness=None,
+                                  temperature=v))
+
+        brightness_slider = ElgatoLabeledSlider(brightness_callback,
+                                                "Brightness",
                                                 0, 100, 10,
                                                 individual_tab_widget)
-        temperature_slider = ElgatoLabeledSlider("Color Temperature",
+        temperature_slider = ElgatoLabeledSlider(temperature_callback,
+                                                 "Color Temperature",
                                                  2900, 7000, 100,
                                                  individual_tab_widget)
 
